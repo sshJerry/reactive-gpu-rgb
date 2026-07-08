@@ -57,13 +57,18 @@ if [ "$retry" -ge "$MAX_RETRIES" ]; then
 fi
 
 # --- Main loop ---
+PREV_STATE=""
+
 while true; do
     UTIL=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits -i 0 | tr -d ' \n\r')
 
     if [ "$UTIL" -lt 15 ]; then
         # Off: below 15%, shut down all RGB to save power/avoid distraction
-        openrgb --device $GPU_DEVICE  --mode off --noautoconnect
-        openrgb --device $MOBO_DEVICE --mode off --noautoconnect
+        if [ "$PREV_STATE" != "off" ]; then
+            openrgb --device $GPU_DEVICE  --mode off --noautoconnect
+            openrgb --device $MOBO_DEVICE --mode off --noautoconnect
+            PREV_STATE="off"
+        fi
         SLEEP=$((5 * POLL_MULTIPLIER))
     else
         if [ "$UTIL" -le 40 ]; then
@@ -78,8 +83,11 @@ while true; do
             B=0
         fi
         HEX=$(printf "%02X%02X%02X" "$R" "$G" "$B")
-        openrgb --device $GPU_DEVICE  --mode "$MODE" --color "$HEX" --noautoconnect
-        openrgb --device $MOBO_DEVICE --mode "$MODE" --color "$HEX" --noautoconnect
+        if [ "$PREV_STATE" != "$HEX" ]; then
+            openrgb --device $GPU_DEVICE  --mode "$MODE" --color "$HEX" --noautoconnect
+            openrgb --device $MOBO_DEVICE --mode "$MODE" --color "$HEX" --noautoconnect
+            PREV_STATE="$HEX"
+        fi
         # Sleep scales linearly: 1s at 100% -> 5s at 15%
         SLEEP=$(( (1 + (100 - UTIL) * 4 / 100) * POLL_MULTIPLIER ))
     fi
