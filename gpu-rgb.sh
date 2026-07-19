@@ -11,8 +11,11 @@
 # at 15% down to 1s at 100%, multiplied by POLL_MULTIPLIER.
 
 MODE="Static"
-GPU_DEVICE=0
-MOBO_DEVICE=1
+# OpenRGB device IDs to control. Order from `openrgb -l`:
+#   0-3 : ENE DRAM (4 DIMMs)
+#   4   : ASUS ROG STRIX RTX 3090 (GPU)
+#   5   : ASUS PRIME X570-PRO (Motherboard)
+DEVICES=(0 1 2 3 4 5)
 POLL_MULTIPLIER=1
 
 # How many times to retry GPU detection before giving up.
@@ -65,8 +68,9 @@ while true; do
     if [ "$UTIL" -lt 15 ]; then
         # Off: below 15%, shut down all RGB to save power/avoid distraction
         if [ "$PREV_STATE" != "off" ]; then
-            openrgb --device $GPU_DEVICE  --mode off --noautoconnect
-            openrgb --device $MOBO_DEVICE --mode off --noautoconnect
+            for dev in "${DEVICES[@]}"; do
+                openrgb --device "$dev" --mode off --noautoconnect
+            done
             PREV_STATE="off"
         fi
         SLEEP=$((5 * POLL_MULTIPLIER))
@@ -84,8 +88,9 @@ while true; do
         fi
         HEX=$(printf "%02X%02X%02X" "$R" "$G" "$B")
         if [ "$PREV_STATE" != "$HEX" ]; then
-            openrgb --device $GPU_DEVICE  --mode "$MODE" --color "$HEX" --noautoconnect
-            openrgb --device $MOBO_DEVICE --mode "$MODE" --color "$HEX" --noautoconnect
+            for dev in "${DEVICES[@]}"; do
+                openrgb --device "$dev" --mode "$MODE" --color "$HEX" --noautoconnect
+            done
             PREV_STATE="$HEX"
         fi
         # Sleep scales linearly: 1s at 100% -> 5s at 15%
