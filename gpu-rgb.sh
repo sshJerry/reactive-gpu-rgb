@@ -7,15 +7,19 @@
 #   15-40% : Green -> Yellow (red channel ramps up)
 #   40-100%: Yellow -> Red   (green channel ramps down)
 #
-# Polling is dynamic: idle (off) polls every 5s, active scales from 5s
-# at 15% down to 1s at 100%, multiplied by POLL_MULTIPLIER.
+# Polling is dynamic: idle (off) polls every 5s, active scales from 4s
+# at 15% down to 1s at 100% (integer math), multiplied by POLL_MULTIPLIER.
+# Updates use one OpenRGB client call targeting all devices: concurrent
+# openrgb processes collide on direct hardware access and segfault, and
+# sequential per-device calls cascade slowly across devices.
 
 MODE="Static"
-# OpenRGB device IDs to control. Order from `openrgb -l`:
+# Every detected device is targeted by omitting --device. Devices on this
+# host, in order from `openrgb -l`:
 #   0-3 : ENE DRAM (4 DIMMs)
 #   4   : ASUS ROG STRIX RTX 3090 (GPU)
 #   5   : ASUS PRIME X570-PRO (Motherboard)
-DEVICES=(0 1 2 3 4 5)
+# Note: a device OpenRGB detects in the future would also be included.
 POLL_MULTIPLIER=1
 
 # How many times to retry GPU detection before giving up.
@@ -59,19 +63,50 @@ if [ "$retry" -ge "$MAX_RETRIES" ]; then
     exit 0
 fi
 
+# --- OpenRGB availability check with retry ---
+# openrgb drives RGB controllers directly; no server/daemon is needed on
+# this host. This probe verifies openrgb can enumerate devices (e.g. i2c
+# access works) before entering the main loop.
+retry=0
+while [ "$retry" -lt "$MAX_RETRIES" ]; do
+    if openrgb --list-devices --noautoconnect > /dev/null 2>&1; then
+        break
+    fi
+    retry=$((retry + 1))
+    if [ "$retry" -lt "$MAX_RETRIES" ]; then
+        sleep "$RETRY_DELAY"
+    fi
+done
+
+# If all retries exhausted, exit quietly so systemd leaves the service dead.
+if [ "$retry" -ge "$MAX_RETRIES" ]; then
+    exit 0
+fi
+
 # --- Main loop ---
 PREV_STATE=""
 
 while true; do
     UTIL=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits -i 0 | tr -d ' \n\r')
 
+    # A transient query failure (driver reload, GPU reset) returns empty or
+    # non-numeric output. Keep the last LED state and retry after the idle
+    # interval instead of flashing garbage colors or spinning in a tight loop.
+    if ! [[ "$UTIL" =~ ^[0-9]+$ ]]; then
+        sleep $((5 * POLL_MULTIPLIER))
+        continue
+    fi
+
     if [ "$UTIL" -lt 15 ]; then
         # Off: below 15%, shut down all RGB to save power/avoid distraction
         if [ "$PREV_STATE" != "off" ]; then
-            for dev in "${DEVICES[@]}"; do
-                openrgb --device "$dev" --mode off --noautoconnect
-            done
-            PREV_STATE="off"
+            # One call, all devices. On failure leave PREV_STATE unset so
+            # the next poll retries the update.
+            if openrgb --mode off --noautoconnect; then
+                PREV_STATE="off"
+            else
+                PREV_STATE=""
+            fi
         fi
         SLEEP=$((5 * POLL_MULTIPLIER))
     else
@@ -88,10 +123,11 @@ while true; do
         fi
         HEX=$(printf "%02X%02X%02X" "$R" "$G" "$B")
         if [ "$PREV_STATE" != "$HEX" ]; then
-            for dev in "${DEVICES[@]}"; do
-                openrgb --device "$dev" --mode "$MODE" --color "$HEX" --noautoconnect
-            done
-            PREV_STATE="$HEX"
+            if openrgb --mode "$MODE" --color "$HEX" --noautoconnect; then
+                PREV_STATE="$HEX"
+            else
+                PREV_STATE=""
+            fi
         fi
         # Sleep scales linearly: 1s at 100% -> 5s at 15%
         SLEEP=$(( (1 + (100 - UTIL) * 4 / 100) * POLL_MULTIPLIER ))
