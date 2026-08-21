@@ -8,6 +8,18 @@ devices. Designed for headless Proxmox/Debian hosts.
 
 - NVIDIA GPU with `nvidia-smi`
 - [OpenRGB](https://openrgb.org) installed (`openrgb` available on PATH)
+- Access to RGB controllers (i2c-dev and related kernel modules loaded).
+  No OpenRGB server or daemon is needed: each CLI call drives the
+  hardware directly. The script verifies at startup that openrgb can
+  enumerate devices, retrying 3 times spaced 15s apart before exiting.
+
+## Behavior notes
+
+- A transient `nvidia-smi` failure (driver reload, GPU reset) keeps the
+  last LED state and retries after the idle poll interval.
+- All devices are updated with a single OpenRGB client call. Concurrent
+  openrgb processes segfault from colliding on direct hardware access,
+  so updates stay serialized. A failed update is retried on the next poll.
 
 ## Install
 
